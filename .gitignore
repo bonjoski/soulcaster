@@ -1,0 +1,19 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+*.intoto.jsonl
+*.intoto.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
