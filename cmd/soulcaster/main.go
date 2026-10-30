@@ -6,12 +6,12 @@ import (
 	"os"
 
 	"github.com/bonjoski/soulcaster/pkg/verifier"
+	"github.com/bonjoski/soulcaster/pkg/version"
 	"github.com/bonjoski/soulcaster/pkg/wrapper"
 )
 
 const (
-	Version = "0.1.0"
-	Banner  = "Soulcaster v%s — Runtime Hermetic Compiler Attestation\n"
+	Banner = "Soulcaster %s — Runtime Hermetic Compiler Attestation\n"
 )
 
 func main() {
@@ -28,7 +28,7 @@ func main() {
 	case "verify":
 		handleVerify(os.Args[2:])
 	case "version", "--version", "-v":
-		fmt.Printf(Banner, Version)
+		fmt.Printf(Banner, version.Version)
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -39,7 +39,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Printf(Banner, Version)
+	fmt.Printf(Banner, version.Version)
 	fmt.Println(`
 Usage:
   soulcaster <command> [flags]
@@ -101,7 +101,7 @@ func handleWrap(args []string) {
 		OutputBinary:    *outputBinary,
 		AttestationPath: *attestationPath,
 		Hermetic:        *hermetic,
-		Version:         Version,
+		Version:         version.Version,
 		Stdout:          os.Stdout,
 		Stderr:          os.Stderr,
 	}
