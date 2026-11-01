@@ -1,0 +1,17 @@
+# Soulcaster
+
+> Runtime Hermetic Compiler Attestation & in-toto SLSA Level 3 Provenance.
+
+## Core Capabilities
+- Compiler Wrapping (`soulcaster wrap`): Wraps toolchains (`go build`, `cargo`, `clang`, `make`), capturing input source files, compiler binary digests, and output artifacts.
+- TOCTOU Defense: Computes pre-build and post-build cryptographic snapshots of all source files to detect in-flight source swapping or tampering.
+- Hermeticity Enforcement: Blocks external network egress (`GOPROXY=off`, `GOSUMDB=off`) during compilation.
+- in-toto & SLSA v1.0 Compliant: Outputs verifiable attestation JSONL files (`<binary>.intoto.jsonl`).
+- Attestation Verifier (`soulcaster verify`): Re-hashes binaries and verifies compliance against recorded attestations.
+
+## CLI Usage
+- `soulcaster wrap -o <output_binary> -- <compile_command>`: Compiles binary under hermetic attestation.
+- `soulcaster verify --attestation <file.intoto.jsonl> <binary>`: Validates binary integrity against attestation.
+
+## Documentation
+- Documentation: `docs/knowledge-base/09-soulcaster.md` in repo `spanreed`
