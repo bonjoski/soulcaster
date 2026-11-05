@@ -16,4 +16,4 @@
 
 ## Key Files & Paths
 - Attestation Output: `<binary>.intoto.jsonl`
-- Parent Runbook: `docs/knowledge-base/09-soulcaster.md` in repository `spanreed`
+- Documentation: README.md & AGENTS.md

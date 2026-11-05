@@ -4,7 +4,6 @@
 > **Role:** Lead Supply Chain & Build Integrity Architect  
 > **Ecosystem:** `bonjoski` Sovereign AI Agent Security Toolchain  
 > **Canonical GitHub Description:** *Runtime hermetic compiler attestation interceptor generating in-toto v1.0 and SLSA v1.0 provenance with TOCTOU source defense.*  
-> **Expert Runbook:** [`spanreed/docs/knowledge-base/09-soulcaster.md`](file:///Users/benskolmoski/code/spanreed/docs/knowledge-base/09-soulcaster.md)
 
 ---
 

@@ -1,6 +1,5 @@
 # Claude Code Guidelines for `soulcaster`
 
-> **Authoritative Ecosystem Runbook:** [`spanreed/docs/knowledge-base/09-soulcaster.md`](file:///Users/benskolmoski/code/spanreed/docs/knowledge-base/09-soulcaster.md)
 
 ## Build & Test Commands
 - **Build Binary:** `go build -o bin/soulcaster ./cmd/soulcaster`
