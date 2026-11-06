@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bonjoski/soulcaster/pkg/intoto"
 	"github.com/bonjoski/soulcaster/pkg/verifier"
 	"github.com/bonjoski/soulcaster/pkg/version"
 	"github.com/bonjoski/soulcaster/pkg/wrapper"
@@ -27,6 +28,8 @@ func main() {
 		handleWrap(os.Args[2:])
 	case "verify":
 		handleVerify(os.Args[2:])
+	case "verify-patch":
+		handleVerifyPatch(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf(Banner, version.Version)
 	case "help", "--help", "-h":
@@ -45,9 +48,10 @@ Usage:
   soulcaster <command> [flags]
 
 Commands:
-  wrap     Wrap a compiler/build command, capture provenance, and emit in-toto SLSA attestation
-  verify   Verify binary integrity and hermeticity against an in-toto attestation
-  version  Display Soulcaster version
+  wrap         Wrap a compiler/build command, capture provenance, and emit in-toto SLSA attestation
+  verify       Verify binary integrity and hermeticity against an in-toto attestation
+  verify-patch Run differential AST security analysis on a patch/diff and emit SLSA gate attestation
+  version      Display Soulcaster version
 
 Run 'soulcaster <command> --help' for details on a specific command.`)
 }
@@ -165,4 +169,67 @@ func handleVerify(args []string) {
 	fmt.Printf("  Attestation:      %s\n", attest)
 	fmt.Printf("  Source Files:     %d checked\n", res.SourceFilesVerified)
 	fmt.Printf("  Hermetic Mode:    %t\n", res.HermeticMode)
+}
+
+func handleVerifyPatch(args []string) {
+	fs := flag.NewFlagSet("verify-patch", flag.ExitOnError)
+	base := fs.String("base", "", "Base file, directory, or git ref")
+	head := fs.String("head", "", "Head file, directory, or git ref")
+	patchPath := fs.String("patch", "", "Path to unified diff / patch file")
+	baseDir := fs.String("base-dir", "", "Base directory path")
+	headDir := fs.String("head-dir", "", "Head directory path")
+	attestationPath := fs.String("output-attestation", "", "Output path for the in-toto gate attestation")
+	fs.StringVar(attestationPath, "o", "", "Alias for --output-attestation")
+	jsonOutput := fs.Bool("json", false, "Output machine-readable JSON diagnostic proof")
+	strict := fs.Bool("strict", true, "Fail-closed on any secondary vulnerability finding")
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing verify-patch flags: %v\n", err)
+		os.Exit(1)
+	}
+
+	opts := verifier.PatchVerificationOptions{
+		BaseRef:         *base,
+		HeadRef:         *head,
+		PatchPath:       *patchPath,
+		BaseDir:         *baseDir,
+		HeadDir:         *headDir,
+		AttestationPath: *attestationPath,
+		Strict:          *strict,
+	}
+
+	// Auto-detect file vs ref if base/head provided without base-dir/head-dir
+	if *base != "" && *head != "" && *baseDir == "" && *headDir == "" {
+		if fiBase, err := os.Stat(*base); err == nil && !fiBase.IsDir() {
+			opts.BaseFile = *base
+			opts.HeadFile = *head
+			opts.BaseRef = ""
+			opts.HeadRef = ""
+		} else if fiBase, err := os.Stat(*base); err == nil && fiBase.IsDir() {
+			opts.BaseDir = *base
+			opts.HeadDir = *head
+			opts.BaseRef = ""
+			opts.HeadRef = ""
+		}
+	}
+
+	res, err := verifier.VerifyPatch(opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Soulcaster verify-patch failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *jsonOutput {
+		fmt.Println(res.DiagnosticJSON)
+	} else {
+		fmt.Print(res.Summary)
+		if res.Passed && res.AttestationPath != "" {
+			fmt.Printf("  Attestation Emitted: %s\n", res.AttestationPath)
+			fmt.Printf("  Predicate Type:      %s\n", intoto.SecondaryVulnerabilityGatePredicateTypeV1)
+		}
+	}
+
+	if !res.Passed {
+		os.Exit(1)
+	}
 }
