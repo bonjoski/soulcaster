@@ -2,10 +2,19 @@ package astdiff
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"unicode"
+)
+
+const (
+	maxAnalyzedFileBytes = 32 << 20 // 32 MiB max single source file
+	maxDiffBytes         = 64 << 20 // 64 MiB max git diff / patch stream
 )
 
 // LanguageAnalyzer is the interface implemented by language-specific AST engines.
@@ -47,13 +56,15 @@ func (a *Analyzer) findAnalyzer(filename string) LanguageAnalyzer {
 
 // AnalyzeSources evaluates base and head source bytes for a single file.
 func (a *Analyzer) AnalyzeSources(filename string, baseSource, headSource []byte) (*AnalysisResult, error) {
+	if int64(len(baseSource)) > maxAnalyzedFileBytes || int64(len(headSource)) > maxAnalyzedFileBytes {
+		return nil, fmt.Errorf("source input for %s exceeds %d byte limit", filename, maxAnalyzedFileBytes)
+	}
 	res := NewAnalysisResult("base", "head")
 	res.Files = append(res.Files, filename)
 	res.Summary.TotalFilesAnalyzed = 1
 
 	la := a.findAnalyzer(filename)
 	if la == nil {
-		// Not a supported language file; passes cleanly
 		return res, nil
 	}
 
@@ -69,21 +80,21 @@ func (a *Analyzer) AnalyzeSources(filename string, baseSource, headSource []byte
 	return res, nil
 }
 
-// AnalyzeFilePair compares two files on disk.
+// AnalyzeFilePair compares two files on disk with bounded reads.
 func (a *Analyzer) AnalyzeFilePair(basePath, headPath string) (*AnalysisResult, error) {
 	var baseBytes []byte
 	var headBytes []byte
 	var err error
 
 	if basePath != "" {
-		baseBytes, err = os.ReadFile(basePath)
+		baseBytes, err = readBoundedFile(basePath, maxAnalyzedFileBytes)
 		if err != nil && !os.IsNotExist(err) {
 			return nil, fmt.Errorf("failed to read base file %s: %w", basePath, err)
 		}
 	}
 
 	if headPath != "" {
-		headBytes, err = os.ReadFile(headPath)
+		headBytes, err = readBoundedFile(headPath, maxAnalyzedFileBytes)
 		if err != nil && !os.IsNotExist(err) {
 			return nil, fmt.Errorf("failed to read head file %s: %w", headPath, err)
 		}
@@ -99,6 +110,9 @@ func (a *Analyzer) AnalyzeFilePair(basePath, headPath string) (*AnalysisResult, 
 
 // AnalyzePatch parses and evaluates a unified diff/patch directly.
 func (a *Analyzer) AnalyzePatch(patchData []byte) (*AnalysisResult, error) {
+	if int64(len(patchData)) > maxDiffBytes {
+		return nil, fmt.Errorf("patch payload exceeds %d byte limit", maxDiffBytes)
+	}
 	fileDiffs, err := ParsePatch(patchData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse patch data: %w", err)
@@ -123,14 +137,15 @@ func (a *Analyzer) AnalyzePatch(patchData []byte) (*AnalysisResult, error) {
 		res.Files = append(res.Files, evalPath)
 		res.Summary.TotalFilesAnalyzed++
 
-		// If the file exists on disk, read current file
+		// Reconstruct base and head hunks safely; only read local disk if evalPath is a safe relative path.
 		var headBytes []byte
 		var baseBytes []byte
-		if data, err := os.ReadFile(evalPath); err == nil {
-			headBytes = data
+		if isSafeRelativePath(evalPath) {
+			if data, err := readBoundedFile(evalPath, maxAnalyzedFileBytes); err == nil {
+				headBytes = data
+			}
 		}
 
-		// Reconstruct base and head hunks from patch if disk read is unavailable
 		if len(headBytes) == 0 {
 			baseBytes, headBytes = reconstructSourcesFromDiff(fd)
 		}
@@ -148,17 +163,44 @@ func (a *Analyzer) AnalyzePatch(patchData []byte) (*AnalysisResult, error) {
 	return res, nil
 }
 
-// AnalyzeGitDiff extracts diff from git repository and evaluates using full git object contents.
+// ValidateGitRef ensures a git revision cannot inject CLI flags or control characters into git commands.
+func ValidateGitRef(ref string) error {
+	if ref == "" {
+		return errors.New("git ref cannot be empty")
+	}
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("invalid git ref %q: refs starting with '-' are forbidden (flag injection guard)", ref)
+	}
+	if len(ref) > 256 {
+		return fmt.Errorf("invalid git ref %q: exceeds 256 characters", ref)
+	}
+	for _, r := range ref {
+		if r == 0 || unicode.IsControl(r) || unicode.IsSpace(r) {
+			return fmt.Errorf("invalid git ref %q: contains whitespace or control characters", ref)
+		}
+	}
+	return nil
+}
+
+// AnalyzeGitDiff extracts diff from git repository and evaluates using bounded git object contents.
 func (a *Analyzer) AnalyzeGitDiff(repoDir, baseRef, headRef string) (*AnalysisResult, error) {
 	if headRef == "" {
 		headRef = "HEAD"
 	}
+	if err := ValidateGitRef(baseRef); err != nil {
+		return nil, err
+	}
+	if err := ValidateGitRef(headRef); err != nil {
+		return nil, err
+	}
 
-	// 1. Get raw diff
-	args := []string{"diff", baseRef, headRef}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = repoDir
-	diffBytes, err := cmd.Output()
+	absRepoDir, err := filepath.Abs(repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve repoDir %q: %w", repoDir, err)
+	}
+
+	// 1. Get raw diff safely with --no-ext-diff and -- separator.
+	diffBytes, err := runBoundedCommand(absRepoDir, maxDiffBytes, "git", "diff", "--no-ext-diff", baseRef, headRef, "--")
 	if err != nil {
 		return nil, fmt.Errorf("git diff failed (%s..%s): %w", baseRef, headRef, err)
 	}
@@ -187,28 +229,22 @@ func (a *Analyzer) AnalyzeGitDiff(repoDir, baseRef, headRef string) (*AnalysisRe
 		res.Files = append(res.Files, evalPath)
 		res.Summary.TotalFilesAnalyzed++
 
-		// Fetch base content via git show
 		var baseBytes []byte
-		if fd.OldPath != "" && !fd.IsNew {
-			showCmd := exec.Command("git", "show", fmt.Sprintf("%s:%s", baseRef, fd.OldPath))
-			showCmd.Dir = repoDir
-			out, err := showCmd.Output()
-			if err == nil {
+		if fd.OldPath != "" && !fd.IsNew && isSafeRelativePath(fd.OldPath) {
+			out, showErr := runBoundedCommand(absRepoDir, maxAnalyzedFileBytes, "git", "show", fmt.Sprintf("%s:%s", baseRef, fd.OldPath))
+			if showErr == nil {
 				baseBytes = out
 			}
 		}
 
-		// Fetch head content via git show
 		var headBytes []byte
-		if fd.NewPath != "" && !fd.IsDeleted {
-			showCmd := exec.Command("git", "show", fmt.Sprintf("%s:%s", headRef, fd.NewPath))
-			showCmd.Dir = repoDir
-			out, err := showCmd.Output()
-			if err == nil {
+		if fd.NewPath != "" && !fd.IsDeleted && isSafeRelativePath(fd.NewPath) {
+			out, showErr := runBoundedCommand(absRepoDir, maxAnalyzedFileBytes, "git", "show", fmt.Sprintf("%s:%s", headRef, fd.NewPath))
+			if showErr == nil {
 				headBytes = out
 			} else {
-				// Fallback to local working directory if headRef is working tree
-				if data, errRead := os.ReadFile(filepath.Join(repoDir, fd.NewPath)); errRead == nil {
+				candidate := filepath.Join(absRepoDir, filepath.Clean(filepath.FromSlash(fd.NewPath)))
+				if data, errRead := readBoundedFile(candidate, maxAnalyzedFileBytes); errRead == nil {
 					headBytes = data
 				}
 			}
@@ -227,11 +263,9 @@ func (a *Analyzer) AnalyzeGitDiff(repoDir, baseRef, headRef string) (*AnalysisRe
 	return res, nil
 }
 
-// AnalyzeDirectories recursively compares two directory trees.
+// AnalyzeDirectories recursively compares two directory trees with bounded reads.
 func (a *Analyzer) AnalyzeDirectories(baseDir, headDir string) (*AnalysisResult, error) {
 	res := NewAnalysisResult(baseDir, headDir)
-
-	headFiles := make(map[string]bool)
 
 	err := filepath.Walk(headDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -248,24 +282,26 @@ func (a *Analyzer) AnalyzeDirectories(baseDir, headDir string) (*AnalysisResult,
 		if err != nil {
 			return err
 		}
+		if !isSafeRelativePath(relPath) {
+			return fmt.Errorf("unsafe relative path %q in directory walk", relPath)
+		}
 
 		la := a.findAnalyzer(relPath)
 		if la == nil {
 			return nil
 		}
 
-		headFiles[relPath] = true
 		res.Files = append(res.Files, relPath)
 		res.Summary.TotalFilesAnalyzed++
 
-		headBytes, err := os.ReadFile(path)
+		headBytes, err := readBoundedFile(path, maxAnalyzedFileBytes)
 		if err != nil {
 			return err
 		}
 
 		var baseBytes []byte
 		basePath := filepath.Join(baseDir, relPath)
-		if bData, err := os.ReadFile(basePath); err == nil {
+		if bData, err := readBoundedFile(basePath, maxAnalyzedFileBytes); err == nil {
 			baseBytes = bData
 		}
 
@@ -286,6 +322,62 @@ func (a *Analyzer) AnalyzeDirectories(baseDir, headDir string) (*AnalysisResult,
 	}
 
 	return res, nil
+}
+
+func isSafeRelativePath(p string) bool {
+	if p == "" || strings.ContainsRune(p, 0) {
+		return false
+	}
+	fromSlash := filepath.FromSlash(p)
+	if filepath.IsAbs(fromSlash) {
+		return false
+	}
+	clean := filepath.Clean(fromSlash)
+	return clean != "." && clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+}
+
+func readBoundedFile(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("file %q exceeds %d byte read limit", path, maxBytes)
+	}
+	return data, nil
+}
+
+func runBoundedCommand(dir string, maxBytes int64, name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	data, readErr := io.ReadAll(io.LimitReader(stdout, maxBytes+1))
+	waitErr := cmd.Wait()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%s output exceeded %d byte limit", name, maxBytes)
+	}
+	if waitErr != nil {
+		return nil, fmt.Errorf("%w: %s", waitErr, strings.TrimSpace(stderr.String()))
+	}
+	return data, nil
 }
 
 func reconstructSourcesFromDiff(fd *FileDiff) (base []byte, head []byte) {

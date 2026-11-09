@@ -444,3 +444,23 @@ func Login() {
 		t.Errorf("Expected JSON to contain passed: false")
 	}
 }
+
+func TestAdversarialGitRefFlagInjectionBlocked(t *testing.T) {
+	analyzer := NewAnalyzer()
+	tempDir := t.TempDir()
+
+	for _, badRef := range []string{
+		"--output=/tmp/pwned",
+		"-U999999",
+		"--ext-diff",
+		"main\n--output=/tmp/pwned",
+		"HEAD\x00evil",
+	} {
+		if _, err := analyzer.AnalyzeGitDiff(tempDir, badRef, "HEAD"); err == nil {
+			t.Errorf("Expected malicious baseRef %q to be rejected, got nil", badRef)
+		}
+		if _, err := analyzer.AnalyzeGitDiff(tempDir, "HEAD", badRef); err == nil {
+			t.Errorf("Expected malicious headRef %q to be rejected, got nil", badRef)
+		}
+	}
+}

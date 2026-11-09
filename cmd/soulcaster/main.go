@@ -57,7 +57,6 @@ Run 'soulcaster <command> --help' for details on a specific command.`)
 }
 
 func handleWrap(args []string) {
-	// Find '--' separator if present
 	splitIdx := -1
 	for i, arg := range args {
 		if arg == "--" {
@@ -73,8 +72,6 @@ func handleWrap(args []string) {
 		wrapFlags = args[:splitIdx]
 		buildCmd = args[splitIdx+1:]
 	} else {
-		// If no '--', check if there are flags followed by command
-		// or standard flag parsing
 		wrapFlags = args
 	}
 
@@ -83,7 +80,8 @@ func handleWrap(args []string) {
 	fs.StringVar(outputBinary, "o", "", "Alias for --output-binary")
 	attestationPath := fs.String("attestation", "", "Output path for the attestation (default: <binary>.intoto.jsonl)")
 	hermetic := fs.Bool("hermetic", true, "Enforce hermetic environment constraints (e.g. GOPROXY=off)")
-	_ = fs.Bool("sign", false, "Cryptographically sign attestation (hardware/cosign)")
+	sign := fs.Bool("sign", false, "Cryptographically sign attestation as an Ed25519 DSSE envelope")
+	signingKey := fs.String("signing-key", "", "Path or encoded Ed25519 private key (or SOULCASTER_SIGNING_KEY)")
 
 	if err := fs.Parse(wrapFlags); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing wrap flags: %v\n", err)
@@ -105,6 +103,8 @@ func handleWrap(args []string) {
 		OutputBinary:    *outputBinary,
 		AttestationPath: *attestationPath,
 		Hermetic:        *hermetic,
+		Sign:            *sign,
+		SigningKey:      *signingKey,
 		Version:         version.Version,
 		Stdout:          os.Stdout,
 		Stderr:          os.Stderr,
@@ -122,6 +122,7 @@ func handleWrap(args []string) {
 	fmt.Printf("  Source Files:     %d captured\n", res.SourceFilesCaptured)
 	fmt.Printf("  Duration:         %s\n", res.ExecutionDuration)
 	fmt.Printf("  Attestation File: %s\n", res.AttestationPath)
+	fmt.Printf("  DSSE Signed:      %t\n", res.Signed)
 	fmt.Printf("  Hermetic Mode:    %t\n", *hermetic)
 }
 
@@ -129,6 +130,8 @@ func handleVerify(args []string) {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	attestationPath := fs.String("attestation", "", "Path to in-toto SLSA attestation file")
 	verifySources := fs.Bool("verify-sources", false, "Also verify local source file hashes match attestation")
+	publicKey := fs.String("public-key", "", "Path or encoded trusted Ed25519 public key (or SOULCASTER_PUBLIC_KEY)")
+	allowUnsignedDev := fs.Bool("allow-unsigned-dev", false, "Accept unsigned raw in-toto statements (local development only)")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing verify flags: %v\n", err)
@@ -138,7 +141,7 @@ func handleVerify(args []string) {
 	remaining := fs.Args()
 	if len(remaining) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: Target binary must be specified.")
-		fmt.Fprintln(os.Stderr, "Usage: soulcaster verify --attestation <file.jsonl> <binary>")
+		fmt.Fprintln(os.Stderr, "Usage: soulcaster verify --public-key <key> --attestation <file.jsonl> <binary>")
 		os.Exit(1)
 	}
 
@@ -149,9 +152,11 @@ func handleVerify(args []string) {
 	}
 
 	opts := verifier.Options{
-		AttestationPath: attest,
-		BinaryPath:      binaryPath,
-		VerifySources:   *verifySources,
+		AttestationPath:  attest,
+		BinaryPath:       binaryPath,
+		VerifySources:    *verifySources,
+		PublicKey:        *publicKey,
+		AllowUnsignedDev: *allowUnsignedDev,
 	}
 
 	res, err := verifier.Verify(opts)
@@ -167,6 +172,7 @@ func handleVerify(args []string) {
 	fmt.Printf("  Binary:           %s\n", res.BinaryPath)
 	fmt.Printf("  Digest:           %s\n", res.ActualDigest)
 	fmt.Printf("  Attestation:      %s\n", attest)
+	fmt.Printf("  DSSE Signed:      %t\n", res.Signed)
 	fmt.Printf("  Source Files:     %d checked\n", res.SourceFilesVerified)
 	fmt.Printf("  Hermetic Mode:    %t\n", res.HermeticMode)
 }
@@ -198,7 +204,6 @@ func handleVerifyPatch(args []string) {
 		Strict:          *strict,
 	}
 
-	// Auto-detect file vs ref if base/head provided without base-dir/head-dir
 	if *base != "" && *head != "" && *baseDir == "" && *headDir == "" {
 		if fiBase, err := os.Stat(*base); err == nil && !fiBase.IsDir() {
 			opts.BaseFile = *base

@@ -64,7 +64,7 @@ func VerifyPatch(opts PatchVerificationOptions) (*PatchVerificationResult, error
 		if !filepath.IsAbs(absPatch) {
 			absPatch = filepath.Join(workDir, opts.PatchPath)
 		}
-		data, errRead := os.ReadFile(absPatch)
+		data, errRead := readBoundedFile(absPatch, maxAttestationBytes)
 		if errRead != nil {
 			return nil, fmt.Errorf("failed to read patch file %s: %w", absPatch, errRead)
 		}
@@ -81,7 +81,7 @@ func VerifyPatch(opts PatchVerificationOptions) (*PatchVerificationResult, error
 	} else if opts.BaseFile != "" || opts.HeadFile != "" {
 		analysis, err = analyzer.AnalyzeFilePair(opts.BaseFile, opts.HeadFile)
 		subjectName = filepath.Base(opts.HeadFile)
-		if data, errRead := os.ReadFile(opts.HeadFile); errRead == nil {
+		if data, errRead := readBoundedFile(opts.HeadFile, maxAttestationBytes); errRead == nil {
 			subjectBytes = data
 		} else {
 			subjectBytes = []byte(opts.HeadFile)
@@ -105,14 +105,18 @@ func VerifyPatch(opts PatchVerificationOptions) (*PatchVerificationResult, error
 	}
 
 	// Always produce machine-readable diagnostic proof
-	diagBytes, _ := analysis.ToJSON()
-	res.DiagnosticJSON = string(diagBytes)
+	diagBytes, diagErr := analysis.ToJSON()
+	if diagErr == nil {
+		res.DiagnosticJSON = string(diagBytes)
+	}
 
 	// Fail closed if any violations detected
 	if !analysis.Passed {
 		// Clean up stale attestation if path provided
 		if opts.AttestationPath != "" {
-			_ = os.Remove(opts.AttestationPath)
+			if rmErr := os.Remove(opts.AttestationPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				return nil, fmt.Errorf("failed to remove stale attestation %s: %w", opts.AttestationPath, rmErr)
+			}
 		}
 		return res, nil
 	}
@@ -186,7 +190,7 @@ func VerifyPatch(opts PatchVerificationOptions) (*PatchVerificationResult, error
 
 // VerifySecondaryGateAttestation reads and verifies an in-toto secondary gate statement.
 func VerifySecondaryGateAttestation(attestationPath string) (*intoto.SecondaryGateStatement, error) {
-	data, err := os.ReadFile(attestationPath)
+	data, err := readBoundedFile(attestationPath, maxAttestationBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read gate attestation %s: %w", attestationPath, err)
 	}

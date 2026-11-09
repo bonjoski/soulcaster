@@ -47,7 +47,7 @@ func TestInTotoStatementGenerationSchema(t *testing.T) {
 			Name: "networkMonitor",
 			Annotations: map[string]string{
 				"externalSocketsOpened": "0",
-				"hermetic":               "true",
+				"hermetic":              "true",
 			},
 		},
 	}

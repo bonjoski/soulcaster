@@ -1,6 +1,8 @@
 package verifier
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +15,11 @@ import (
 func TestVerifierTamperedBinaryDetection(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// 1. Create original binary
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate Ed25519 keypair: %v", err)
+	}
+
 	binPath := filepath.Join(tempDir, "production_agent")
 	originalBytes := []byte("\x7fELF\x02\x01\x01\x00_secure_binary_payload_")
 	if err := os.WriteFile(binPath, originalBytes, 0755); err != nil {
@@ -25,15 +31,12 @@ func TestVerifierTamperedBinaryDetection(t *testing.T) {
 		t.Fatalf("Failed to hash binary: %v", err)
 	}
 
-	// 2. Generate valid SLSA attestation
 	now := time.Now().UTC()
 	subject := []intoto.ResourceDescriptor{
 		{
-			Name: "production_agent",
-			URI:  "file://production_agent",
-			Digest: intoto.DigestSet{
-				"sha256": actualSha,
-			},
+			Name:   "production_agent",
+			URI:    "file://production_agent",
+			Digest: intoto.DigestSet{"sha256": actualSha},
 		},
 	}
 	stmt := intoto.NewStatement(
@@ -51,37 +54,35 @@ func TestVerifierTamperedBinaryDetection(t *testing.T) {
 	)
 
 	attestPath := filepath.Join(tempDir, "production_agent.intoto.jsonl")
-	data, err := stmt.ToJSONL()
+	_, signedBytes, err := intoto.SignStatementDSSE(stmt, priv)
 	if err != nil {
-		t.Fatalf("Failed to marshal attestation: %v", err)
+		t.Fatalf("Failed to sign DSSE attestation: %v", err)
 	}
-	if err := os.WriteFile(attestPath, data, 0644); err != nil {
+	if err := os.WriteFile(attestPath, signedBytes, 0600); err != nil {
 		t.Fatalf("Failed to write attestation: %v", err)
 	}
 
-	// 3. Verify pristine binary passes
 	opts := Options{
 		AttestationPath: attestPath,
 		BinaryPath:      binPath,
 		WorkDir:         tempDir,
 		VerifySources:   false,
+		TrustedKeys:     []ed25519.PublicKey{pub},
 	}
 
 	res, err := Verify(opts)
 	if err != nil {
-		t.Fatalf("Expected pristine binary verification to pass, got: %v", err)
+		t.Fatalf("Expected pristine signed binary verification to pass, got: %v", err)
 	}
-	if !res.Passed {
-		t.Errorf("Expected res.Passed == true")
+	if !res.Passed || !res.Signed {
+		t.Errorf("Expected res.Passed && res.Signed == true, got Passed=%t Signed=%t", res.Passed, res.Signed)
 	}
 
-	// 4. Tamper with the binary (flip bytes)
 	tamperedBytes := []byte("\x7fELF\x02\x01\x01\x00_backdoored_payload_")
 	if err := os.WriteFile(binPath, tamperedBytes, 0755); err != nil {
 		t.Fatalf("Failed to overwrite binary with tampered payload: %v", err)
 	}
 
-	// 5. Verify tampered binary is detected and rejected
 	resTampered, err := Verify(opts)
 	if err == nil {
 		t.Fatalf("Expected tampered binary verification to FAIL, but it succeeded!")
@@ -96,6 +97,11 @@ func TestVerifierTamperedBinaryDetection(t *testing.T) {
 
 func TestVerifierSourceVerification(t *testing.T) {
 	tempDir := t.TempDir()
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate Ed25519 keypair: %v", err)
+	}
 
 	binPath := filepath.Join(tempDir, "app")
 	if err := os.WriteFile(binPath, []byte("app_content"), 0755); err != nil {
@@ -123,15 +129,20 @@ func TestVerifierSourceVerification(t *testing.T) {
 		&now, &now, "inv-src", nil,
 	)
 	attestPath := filepath.Join(tempDir, "app.intoto.jsonl")
-	data, _ := stmt.ToJSONL()
-	os.WriteFile(attestPath, data, 0644)
+	_, signedBytes, err := intoto.SignStatementDSSE(stmt, priv)
+	if err != nil {
+		t.Fatalf("Failed to sign DSSE: %v", err)
+	}
+	if err := os.WriteFile(attestPath, signedBytes, 0600); err != nil {
+		t.Fatalf("Failed to write attestation: %v", err)
+	}
 
-	// Untouched source -> passes
 	res, err := Verify(Options{
 		AttestationPath: attestPath,
 		BinaryPath:      binPath,
 		WorkDir:         tempDir,
 		VerifySources:   true,
+		TrustedKeys:     []ed25519.PublicKey{pub},
 	})
 	if err != nil || !res.Passed {
 		t.Fatalf("Expected source verification to pass, got: %v", err)
@@ -140,19 +151,21 @@ func TestVerifierSourceVerification(t *testing.T) {
 		t.Errorf("Expected 1 verified source file, got %d", res.SourceFilesVerified)
 	}
 
-	// Tamper with source file on disk
-	os.WriteFile(srcPath, []byte("package main // altered"), 0644)
+	if err := os.WriteFile(srcPath, []byte("package main // altered"), 0644); err != nil {
+		t.Fatalf("Failed to tamper source: %v", err)
+	}
 
 	resTampered, err := Verify(Options{
 		AttestationPath: attestPath,
 		BinaryPath:      binPath,
 		WorkDir:         tempDir,
 		VerifySources:   true,
+		TrustedKeys:     []ed25519.PublicKey{pub},
 	})
 	if err == nil {
 		t.Fatalf("Expected source tampering to fail verification!")
 	}
-	if resTampered.Passed {
+	if resTampered != nil && resTampered.Passed {
 		t.Errorf("Expected resTampered.Passed == false")
 	}
 }
