@@ -24,7 +24,7 @@ func main() {
 	command := os.Args[1]
 
 	switch command {
-	case "wrap":
+	case "wrap", "run":
 		handleWrap(os.Args[2:])
 	case "verify":
 		handleVerify(os.Args[2:])
@@ -49,6 +49,7 @@ Usage:
 
 Commands:
   wrap         Wrap a compiler/build command, capture provenance, and emit in-toto SLSA attestation
+  run          Alias for wrap (universal ecosystem runner verb)
   verify       Verify binary integrity and hermeticity against an in-toto attestation
   verify-patch Run differential AST security analysis on a patch/diff and emit SLSA gate attestation
   version      Display Soulcaster version
