@@ -30,6 +30,8 @@ func main() {
 		handleVerify(os.Args[2:])
 	case "verify-patch":
 		handleVerifyPatch(os.Args[2:])
+	case "verify-variant":
+		handleVerifyVariant(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf(Banner, version.Version)
 	case "help", "--help", "-h":
@@ -51,7 +53,8 @@ Commands:
   wrap         Wrap a compiler/build command, capture provenance, and emit in-toto SLSA attestation
   run          Alias for wrap (universal ecosystem runner verb)
   verify       Verify binary integrity and hermeticity against an in-toto attestation
-  verify-patch Run differential AST security analysis on a patch/diff and emit SLSA gate attestation
+  verify-patch   Run differential AST security analysis on a patch/diff and emit SLSA gate attestation
+  verify-variant Run anti-patchslop variant mutation analysis and compiler hardening verification
   version      Display Soulcaster version
 
 Run 'soulcaster <command> --help' for details on a specific command.`)

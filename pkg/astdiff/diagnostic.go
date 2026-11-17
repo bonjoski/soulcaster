@@ -21,9 +21,12 @@ const (
 type RuleID string
 
 const (
-	RuleRemovedAuthCheck RuleID = "SEC-AST-001"
-	RuleErrorSwallowed   RuleID = "SEC-AST-002"
-	RuleDangerousMemory  RuleID = "SEC-AST-003"
+	RuleRemovedAuthCheck                RuleID = "SEC-AST-001"
+	RuleErrorSwallowed                  RuleID = "SEC-AST-002"
+	RuleDangerousMemory                 RuleID = "SEC-AST-003"
+	RulePatchSlopIncompleteSanitization RuleID = "SEC-VAR-001"
+	RuleAdjacentBranchBypass            RuleID = "SEC-VAR-002"
+	RuleEncodingBypass                  RuleID = "SEC-VAR-003"
 )
 
 // Violation describes a concrete AST security flaw detected in a diff.
