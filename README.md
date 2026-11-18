@@ -63,6 +63,18 @@ If the binary or any tracked source file was tampered with, verification immedia
 
 ---
 
+## 💡 Core Use Cases & Recipes
+
+Every primary developer use case is backed by dedicated, copy-pasteable recipes in [**`docs/use-cases/`**](docs/use-cases/README.md):
+
+| Use Case | Scenario & Quick Recipe | Full Guide |
+| :--- | :--- | :--- |
+| **Hermetic Compiler Wrapping** | Enforce bit-for-bit reproducible builds with zero ambient environment leakage:<br/>`soulcaster wrap -o bin/myapp -- go build ...` | [Guide](docs/use-cases/01-hermetic-compiler-wrapping.md) |
+| **SLSA Level 3 Provenance Generation** | Output signed in-toto SLSA v1.0 provenance during release builds:<br/>`soulcaster wrap --attest -o bin/myapp -- <cmd>` | [Guide](docs/use-cases/02-slsa-provenance-attestation.md) |
+| **Offline Provenance Verification** | Validate downloaded binary against signed provenance offline:<br/>`soulcaster verify bin/myapp bin/myapp.intoto.jsonl` | [Guide](docs/use-cases/03-offline-provenance-verification.md) |
+
+---
+
 ## Architecture & Dataflow
 
 ```mermaid
