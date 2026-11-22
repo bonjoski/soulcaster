@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/bonjoski/soulcaster/pkg/intoto"
+	"github.com/bonjoski/soulcaster/pkg/ux"
 	"github.com/bonjoski/soulcaster/pkg/verifier"
 	"github.com/bonjoski/soulcaster/pkg/version"
 	"github.com/bonjoski/soulcaster/pkg/wrapper"
@@ -26,6 +27,10 @@ func main() {
 	switch command {
 	case "wrap", "run":
 		handleWrap(os.Args[2:])
+	case "receipt":
+		os.Exit(runReceipt(os.Args[2:], os.Stdout, os.Stderr))
+	case "explain":
+		os.Exit(runExplain(os.Args[2:], os.Stdout, os.Stderr))
 	case "verify":
 		handleVerify(os.Args[2:])
 	case "verify-patch":
@@ -37,8 +42,15 @@ func main() {
 	case "help", "--help", "-h":
 		printUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %q\n\n", command)
-		printUsage()
+		ffe := &ux.FixForwardError{
+			Tool:           "soulcaster",
+			Code:           "SOULCASTER_UNKNOWN_COMMAND",
+			Summary:        fmt.Sprintf("Unknown command %q", command),
+			RemediationCmd: "soulcaster --help",
+			WhyOneLiner:    "Supported commands: wrap, run, receipt, explain, verify, verify-patch, verify-variant, version.",
+			ExitCode:       1,
+		}
+		_ = ffe.Render(os.Stderr, false, false)
 		os.Exit(1)
 	}
 }
@@ -50,12 +62,14 @@ Usage:
   soulcaster <command> [flags]
 
 Commands:
-  wrap         Wrap a compiler/build command, capture provenance, and emit in-toto SLSA attestation
-  run          Alias for wrap (universal ecosystem runner verb)
-  verify       Verify binary integrity and hermeticity against an in-toto attestation
+  wrap           Wrap a compiler/build command, capture provenance, and emit in-toto SLSA attestation
+  run            Alias for wrap (universal ecosystem runner verb)
+  receipt        Generate a portable 100% local in-toto v1.0 / SLSA v1.0 provenance receipt JSONL
+  explain        Explain receipt, slsa, toctou, or verify-patch with progressive disclosure (--why)
+  verify         Verify binary integrity and hermeticity against an in-toto attestation
   verify-patch   Run differential AST security analysis on a patch/diff and emit SLSA gate attestation
   verify-variant Run anti-patchslop variant mutation analysis and compiler hardening verification
-  version      Display Soulcaster version
+  version        Display Soulcaster version
 
 Run 'soulcaster <command> --help' for details on a specific command.`)
 }
@@ -86,6 +100,7 @@ func handleWrap(args []string) {
 	hermetic := fs.Bool("hermetic", true, "Enforce hermetic environment constraints (e.g. GOPROXY=off)")
 	sign := fs.Bool("sign", false, "Cryptographically sign attestation as an Ed25519 DSSE envelope")
 	signingKey := fs.String("signing-key", "", "Path or encoded Ed25519 private key (or SOULCASTER_SIGNING_KEY)")
+	showWhy := fs.Bool("why", false, "Progressive disclosure of SLSA/TOCTOU details on errors")
 
 	if err := fs.Parse(wrapFlags); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing wrap flags: %v\n", err)
@@ -97,8 +112,16 @@ func handleWrap(args []string) {
 	}
 
 	if len(buildCmd) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: No build command specified.")
-		fmt.Fprintln(os.Stderr, "Usage: soulcaster wrap [flags] -- <compiler-cmd> [args...]")
+		ffe := &ux.FixForwardError{
+			Tool:           "soulcaster",
+			Code:           "SOULCASTER_WRAP_MISSING_COMMAND",
+			Summary:        "No build command specified for hermetic wrapping",
+			RemediationCmd: "soulcaster wrap -o bin/app -- go build -o bin/app .",
+			WhyOneLiner:    "Soulcaster snapshots inputs before invoking the compiler and verifies post-build TOCTOU integrity.",
+			DeepWhy:        "Pass the compiler command after `--` so Soulcaster can stage a read-only source snapshot and emit an in-toto v1.0 / SLSA v1.0 provenance attestation.",
+			ExitCode:       1,
+		}
+		_ = ffe.Render(os.Stderr, false, *showWhy)
 		os.Exit(1)
 	}
 
@@ -136,6 +159,7 @@ func handleVerify(args []string) {
 	verifySources := fs.Bool("verify-sources", false, "Also verify local source file hashes match attestation")
 	publicKey := fs.String("public-key", "", "Path or encoded trusted Ed25519 public key (or SOULCASTER_PUBLIC_KEY)")
 	allowUnsignedDev := fs.Bool("allow-unsigned-dev", false, "Accept unsigned raw in-toto statements (local development only)")
+	showWhy := fs.Bool("why", false, "Progressive disclosure of verification failure context")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing verify flags: %v\n", err)
@@ -144,8 +168,16 @@ func handleVerify(args []string) {
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: Target binary must be specified.")
-		fmt.Fprintln(os.Stderr, "Usage: soulcaster verify --public-key <key> --attestation <file.jsonl> <binary>")
+		ffe := &ux.FixForwardError{
+			Tool:           "soulcaster",
+			Code:           "SOULCASTER_VERIFY_MISSING_BINARY",
+			Summary:        "Target binary path must be specified for verification",
+			RemediationCmd: "soulcaster verify --allow-unsigned-dev --attestation bin/app.intoto.jsonl bin/app",
+			WhyOneLiner:    "Soulcaster re-hashes the target binary and compares it against the recorded in-toto subject digest.",
+			DeepWhy:        "Provide the compiled binary path and either a trusted Ed25519 --public-key (for DSSE-signed attestations) or --allow-unsigned-dev for local development receipts.",
+			ExitCode:       1,
+		}
+		_ = ffe.Render(os.Stderr, false, *showWhy)
 		os.Exit(1)
 	}
 
@@ -192,6 +224,7 @@ func handleVerifyPatch(args []string) {
 	fs.StringVar(attestationPath, "o", "", "Alias for --output-attestation")
 	jsonOutput := fs.Bool("json", false, "Output machine-readable JSON diagnostic proof")
 	strict := fs.Bool("strict", true, "Fail-closed on any secondary vulnerability finding")
+	_ = fs.Bool("why", false, "Progressive disclosure of AST security gate context")
 
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing verify-patch flags: %v\n", err)

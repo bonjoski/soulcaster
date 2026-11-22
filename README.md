@@ -72,6 +72,24 @@ Every primary developer use case is backed by dedicated, copy-pasteable recipes 
 | **Hermetic Compiler Wrapping** | Enforce bit-for-bit reproducible builds with zero ambient environment leakage:<br/>`soulcaster wrap -o bin/myapp -- go build ...` | [Guide](docs/use-cases/01-hermetic-compiler-wrapping.md) |
 | **SLSA Level 3 Provenance Generation** | Output signed in-toto SLSA v1.0 provenance during release builds:<br/>`soulcaster wrap --attest -o bin/myapp -- <cmd>` | [Guide](docs/use-cases/02-slsa-provenance-attestation.md) |
 | **Offline Provenance Verification** | Validate downloaded binary against signed provenance offline:<br/>`soulcaster verify bin/myapp bin/myapp.intoto.jsonl` | [Guide](docs/use-cases/03-offline-provenance-verification.md) |
+| **Portable Local Provenance Receipts (`--why`)** | Emit a 100% local in-toto v1.0 / SLSA v1.0 JSONL receipt with symlink defense and progressive disclosure:<br/>`soulcaster receipt --artifact dist/app --out receipts/provenance.intoto.jsonl --why` | [Recipe](#portable-local-receipts--progressive-disclosure---why) |
+
+### Portable Local Receipts & Progressive Disclosure (`--why`)
+
+Generate a portable, 100% local **in-toto v1.0 / SLSA v1.0** provenance receipt (SHA-256 via `os.OpenRoot` + `O_NOFOLLOW`, local git commit/branch metadata, zero cloud calls) directly compatible with `verify-local-receipts.yml` and `paved-road-release.yml`:
+
+```bash
+# Emit single-line JSONL receipt + calm <=3-line summary
+soulcaster receipt --artifact dist/app --out receipts/provenance.intoto.jsonl
+
+# Expand build/TOCTOU provenance rationale (--why) or pipe raw JSON (--json)
+soulcaster receipt --artifact dist/app --out receipts/provenance.intoto.jsonl --why
+soulcaster receipt --artifact dist/app --json
+
+# Progressive disclosure topics: receipt, slsa, toctou, verify-patch
+soulcaster explain receipt --why
+soulcaster explain toctou --json
+```
 
 ---
 
